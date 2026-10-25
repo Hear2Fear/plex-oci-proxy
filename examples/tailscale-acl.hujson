@@ -9,8 +9,13 @@
 // compromised VM could reach SSH, NAS admin pages, SMB, etc. on every device.
 // This policy caps the VM at the Plex port and nothing else.
 //
-// Rollback: the admin console keeps a version history of the policy, and it is
-// reachable from any browser (no tailnet needed), so a mistake here is cheap.
+// Order matters (see README Phase 9): define tagOwners and save, tag the two
+// servers in Machines, THEN paste this whole file. Otherwise the proxy loses
+// Plex until it is tagged.
+//
+// Rollback: copy the current policy to a file before replacing it. The admin
+// console is a website (no tailnet needed), so pasting the old copy back and
+// saving undoes a mistake in seconds. Logs records every policy change.
 {
   // Tag the VM and the Plex host from the admin console
   // (Machines -> ... -> Edit ACL tags) so neither has to re-authenticate.

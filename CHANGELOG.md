@@ -17,3 +17,12 @@
 - Phase 7 rewritten with exact Plex Web labels (checked against a live server): settings
   file backup per platform, every Network field, Relay off, Remote Access off and its
   expected red warning, Preferences.xml key check, client quality paths, fuller rollback.
+
+## 2026-10-24 (Tailscale + mobile data)
+- Tailscale: account setup, admin console tour, Device management settings, auth-key
+  options, exact Machines menu paths (key expiry, rename, IPv4, routes, ACL tags), all
+  checked against a live admin console.
+- Phase 9 reordered into three saves (tagOwners -> tag nodes -> full policy) so remote
+  Plex never drops while tagging.
+- New F9b: mobile data metering, video throttling, deprioritization, hotspot limits, and
+  why carrier-cached services outperform a cloud-hosted server on cellular.

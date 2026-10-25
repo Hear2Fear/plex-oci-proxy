@@ -382,23 +382,76 @@ about 30–40 ms home→VM, and no measurable throughput loss for viewers.
 
 ### Phase 3: Tailscale on the VM
 
-11. Install and join, with an explicit hostname (otherwise it registers with an odd name
-    derived from the VNIC):
+**First time with Tailscale?** Create an account at <https://login.tailscale.com/start>,
+signing in with Google, Microsoft, GitHub, Apple or another identity provider. The free
+**Personal** plan is enough. Your *tailnet* is created automatically. Install Tailscale on
+your workstation or phone too, so you have an admin device on the tailnet.
+
+**Admin console tour** (<https://login.tailscale.com/admin>, checked October 2026). The left
+sidebar has:
+
+| Sidebar | What you use it for here |
+|---|---|
+| **Network → Machines** | Every device. Each row's **⋯** menu has *Edit machine name…, Edit machine IPv4…, Share…, Disable key expiry, View recent activity, Edit route settings…, Edit ACL tags…, Remove…* |
+| **Access controls → JSON editor** | Where you paste the ACL policy (Phase 9). *Policies / Tests / Definitions* are a visual editor for the same file |
+| **Logs** | Configuration changes (who changed the policy, tagged a node, etc.) |
+| **Settings → Device management** | Device approval, default key expiry, auto-update |
+| **Settings → Keys** | Auth keys for joining a device without a browser login |
+
+**Recommended tailnet settings** (Settings → **Device management**):
+- **Device Approval → Manually approve new devices: on.** A stolen login can't silently add a
+  device; you approve each one in Machines. (Note: this can't be combined with Tailnet Lock.)
+- **Key Expiry:** leave the default (180 days) for personal devices. You'll disable expiry
+  per device for the two servers below instead.
+- **Auto-update Tailscale → Auto-update new devices:** your choice. It only affects devices
+  added after you turn it on. On a Synology NAS read the kernel-mode warning in
+  [section 6](#synology-nas-plex-package-or-plex-in-container-manager) first.
+
+11. **Install and join**, with an explicit hostname (otherwise the VM registers with an odd
+    name derived from the VNIC):
 
     ```bash
     curl -fsSL https://tailscale.com/install.sh | sudo sh
     sudo tailscale up --ssh=false --hostname=plex-proxy
-    tailscale ip -4          # this is 100.64.0.20 in this guide
     ```
 
-12. In the Tailscale admin console, **disable key expiry** for this node, and for the Plex
-    host in Phase 4. **Both ends of the tunnel expire.** The one you didn't just build is
-    the one you forget. (Tagged nodes, from Phase 9, have expiry disabled automatically.)
+    `tailscale up` prints a `https://login.tailscale.com/a/…` link. Open it in your browser,
+    signed in to your Tailscale account, and click **Connect**. If you turned on device
+    approval, also click **Approve** on the new machine in **Machines**. Then:
+
+    ```bash
+    tailscale ip -4          # this is 100.64.0.20 in this guide
+    tailscale status         # lists your tailnet's devices
+    ```
+
+    *No browser handy, or scripting it?* **Settings → Keys → Generate auth key…** offers
+    *Description*, *Reusable* (leave off), *Expiration* (1–90 days; this only limits how long
+    the key can be *used*), *Ephemeral* (leave **off** for a server, or it's deleted when it
+    goes offline), *Pre-approved*, and *Tags* (pre-tags the device and disables its key
+    expiry). Use it with `sudo tailscale up --auth-key=tskey-auth-… --hostname=plex-proxy`.
+    Treat the key like a password and let it expire.
+
+12. **Disable key expiry** for this node: **Machines** → `plex-proxy` row → **⋯** →
+    **Disable key expiry**. The row then shows an *Expiry disabled* badge. Do the same for the
+    Plex host in Phase 4. **Both ends of the tunnel expire**, and the one you didn't just
+    build is the one you forget. When the key expires, remote Plex stops without warning.
+    (Nodes you tag in Phase 9 get expiry disabled automatically.)
+
+    Optional, same **⋯** menu:
+    - **Edit machine name…** if the name came out wrong. This is what `tailscale status` and
+      MagicDNS show.
+    - **Edit machine IPv4…** to pick a memorable address (e.g. `100.64.0.20`). The ACL's
+      `hosts` block and Caddy's upstream both use these IPs. Set them now, before anything
+      refers to them.
 
 ### Phase 4: Tailscale on your Plex host
 
 13. Follow the recipe for your host type in **[section 6](#6-tailscale-on-common-plex-hosts)**.
-    Note the Plex host's tailnet IP (`100.64.0.10` here).
+    Note the Plex host's tailnet IP (`100.64.0.10` here). Then, in **Machines**, on its row:
+    **⋯** → **Disable key expiry** (and approve it if device approval is on).
+    - **Subnet router instead?** After `tailscale up --advertise-routes=<plex-lan-ip>/32`,
+      approve the route: **Machines** → the router's row → **⋯** → **Edit route settings…**
+      → tick the `/32` route → **Save**. Until it's approved, nothing is routed.
 14. **Confirm the tunnel is *direct*, not relayed.** From the VM:
 
     ```bash
@@ -638,24 +691,55 @@ Real example from building this: a desktop joined the tailnet during the hardeni
 was **immediately reachable on SMB (port 445) from the cloud VM**. With allow-all, exposure
 grows silently with every device you add.
 
-32. **Tag the nodes** in the admin console (Machines → ⋯ → *Edit ACL tags*). Doing it from
-    the console means no node has to re-authenticate. Tagged nodes stop being "your" devices
-    and are governed only by tag rules; their key expiry is disabled automatically.
+The plan:
 
-    | Node | Tag | May reach |
-    |---|---|---|
-    | Cloud VM | `tag:plex-proxy` | Plex host **port 32400 only** |
-    | Plex host | `tag:plex-server` | VM port 22 (only if you run the monitoring in Phase 11) |
-    | Your admin laptop/phone | *untagged* (listed by name) | Everything |
+| Node | Tag | May reach |
+|---|---|---|
+| Cloud VM | `tag:plex-proxy` | Plex host **port 32400 only** |
+| Plex host | `tag:plex-server` | VM port 22 (only if you run the monitoring in Phase 11) |
+| Your admin laptop/phone | *untagged* (listed by IP in `hosts`) | Everything |
 
-    Keep personal devices **untagged**. Tagging a phone or laptop breaks Taildrop for it.
+Keep personal devices **untagged**. Tagging a phone or laptop makes it owned by the tag
+instead of by you, which breaks Taildrop for it.
 
-33. Start from [examples/tailscale-acl.hujson](examples/tailscale-acl.hujson). Fill in the
-    `hosts` block with your tailnet IPs and paste it into **Access controls** in the admin
-    console. The `tests` block runs on every save and **refuses the save if a test fails**.
-    That's your safety net. Keep it, and add a test whenever you add a rule.
+**Do it in this order.** A tag can't be assigned until the policy defines it, and the full
+policy only lets *tagged* nodes reach Plex. Pasting the full policy first would cut remote
+Plex until you finished tagging. Three short saves avoid that gap.
 
-34. Verify from the VM:
+32. **Save a copy of the current policy, then define the tags.**
+    1. **Access controls → JSON editor.** Copy the whole contents into a local file, e.g.
+       `tailscale-acl.before.hujson`. That's your rollback (and **Logs** records every
+       policy change).
+    2. Add a `tagOwners` block next to whatever is already there. On a new tailnet the
+       existing policy allows everything, so leave its rules alone for now:
+
+       ```jsonc
+       "tagOwners": {
+         "tag:plex-proxy":  ["autogroup:admin"],
+         "tag:plex-server": ["autogroup:admin"],
+       },
+       ```
+
+    3. Optional: open the **Preview rules** tab to check. Then click **Save**.
+
+33. **Tag the two servers.** **Machines** → `plex-proxy` row → **⋯** → **Edit ACL tags…** →
+    **Add tags** → choose `tag:plex-proxy` → **Save**. Repeat for the Plex host with
+    `tag:plex-server`. Doing it in the console means neither node has to re-authenticate.
+    Each row now shows the tag, and *Expiry disabled*, since tagged nodes don't expire.
+    Nothing is restricted yet, because the old allow-all rules are still in place.
+
+34. **Apply the real policy.** Open [examples/tailscale-acl.hujson](examples/tailscale-acl.hujson),
+    fill in the `hosts` block with your devices' tailnet IPs (`tailscale ip -4` on each, or
+    the **Addresses** column in Machines), and adjust the `tests` to your devices. Then
+    **Access controls → JSON editor** → replace the entire contents → **Save**.
+    - The `tests` block runs on every save and **refuses the save if a test fails**, with a
+      message naming the failing test. That's your safety net. Keep it, and add a test
+      whenever you add a rule.
+    - The editor accepts comments and trailing commas (HuJSON), so the example pastes as is.
+    - If you lock yourself out of something: the admin console is a website and needs no
+      tailnet access. Paste your saved copy back and **Save**.
+
+35. Verify from the VM:
 
     ```bash
     nc -vz -w 3 100.64.0.10 32400   # expect: succeeded
@@ -684,7 +768,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
 ### Phase 10: Harden the VM
 
-35. **Close public SSH.** Once you can `ssh ubuntu@100.64.0.20` over the tailnet:
+36. **Close public SSH.** Once you can `ssh ubuntu@100.64.0.20` over the tailnet:
 
     ```bash
     # delete any public port 22 accept rule, then:
@@ -702,7 +786,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
       the Tailscale port can. The serial console is your break-glass either way.
     - Geo filtering is not an SSH access control. In the build this repo came from, one
       week of logs showed hundreds of failed SSH logins from inside the allowed countries.
-36. **sshd**: `/etc/ssh/sshd_config.d/99-hardening.conf`:
+37. **sshd**: `/etc/ssh/sshd_config.d/99-hardening.conf`:
 
     ```
     PermitRootLogin no
@@ -713,7 +797,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
     `sudo sshd -t && sudo systemctl reload ssh`. Note the image also has an `opc` user;
     `AllowUsers` blocks it.
-37. **Automatic patching with reboots.** `unattended-upgrades` is on by default, but
+38. **Automatic patching with reboots.** `unattended-upgrades` is on by default, but
     `Automatic-Reboot` is off, so kernel fixes install and then never run. Add
     `/etc/apt/apt.conf.d/52unattended-upgrades-local`:
 
@@ -724,7 +808,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
     Cost: a ~30-second blip on nights a kernel update lands. Do the reboot test in Phase 6
     first, so you know everything comes back unattended.
-38. ⚠️ **Caddy and Tailscale do not auto-update.** `unattended-upgrades` only takes Ubuntu's
+39. ⚠️ **Caddy and Tailscale do not auto-update.** `unattended-upgrades` only takes Ubuntu's
     own origins by default, and these two come from third-party repositories. So the
     internet-facing TLS server and the daemon holding your tailnet key never update on their
     own. Pick one:
@@ -744,7 +828,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
 ### Phase 11: Monitoring
 
-39. **Run the health check somewhere other than the VM.** A box can't report its own death.
+40. **Run the health check somewhere other than the VM.** A box can't report its own death.
     The Plex host is the natural place: it probes the public URL exactly the way a viewer
     does (out your home internet, to the VM, through Caddy, back over the tunnel), so one
     request covers stale DNS, the VM being down, Caddy down, the tunnel down, an expired
@@ -778,13 +862,13 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
     (see [section 6](#synology-nas-plex-package-or-plex-in-container-manager)). Everything
     still answers, just slower. On a NAS, add `ip link show tailscale0` as a separate check.
 
-40. **Patch monitoring (recommended).** Daily: SSH to the VM over the tailnet and check pending
+41. **Patch monitoring (recommended).** Daily: SSH to the VM over the tailnet and check pending
     updates, whether a reboot is overdue, and whether `caddy`/`tailscale` are behind their
     candidate versions. This needs the `tag:plex-server → tag:plex-proxy:22` rule in the
     example ACL, and it doubles as a check that your admin SSH path still works after
     unattended reboots.
 
-41. **Weekly glance:**
+42. **Weekly glance:**
     - **Spend:** ☰ → **Billing & Cost Management** → **Cost Management** → **Budgets**
       (the *Spent* column), or **Cost Analysis** for a breakdown. Should be `$0`.
     - **Egress:** the instance's **Monitoring** tab shows network bytes out. Compare the
@@ -1026,6 +1110,42 @@ It cleared up on its own the next day. If it persists for you, add IPv6 to the V
 record (also grey cloud), plus `ip6tables` rules and a second `family inet6` ipset. Otherwise
 the v6 path has no geo filter. To measure a client's raw throughput to the VM without Plex
 involved, temporarily serve a 50 MB test file from Caddy.
+
+### F9b: Mobile data has rules your server can't see
+
+Viewers on cellular data are subject to their carrier's plan, and those rules can look exactly
+like a server problem. Before changing anything on the proxy, ask whether the viewer is on
+mobile data. Things to know:
+
+- **Data is metered.** Every minute of video counts against the viewer's allowance. A 1080p
+  Direct Play at 8–10 Mbps is roughly 4 GB per hour. Viewers on limited plans should set their
+  app's *Cellular* quality low on purpose, or download before leaving Wi-Fi where their Plex
+  setup allows it.
+- **Video throttling and "optimization."** Many mobile plans cap video at a fixed resolution
+  or bitrate (often around SD/480p, roughly 1.5–3 Mbps) unless the customer pays for an HD
+  option. Carriers detect video by traffic patterns, so HTTPS doesn't prevent it. Symptoms:
+  a stream that settles at low quality or transcodes no matter what the app is set to, while
+  a speed test on the same phone looks fast.
+- **Deprioritization.** After a monthly usage threshold, or on lower-priority plan tiers,
+  traffic can be slowed whenever the cell site is busy, typically in evenings. Same symptom
+  as congestion, but only on that carrier.
+- **Hotspot / tethered data** is often capped or throttled separately. A laptop on a phone's
+  hotspot may stream much worse than the phone itself.
+- **Big streaming services get a shortcut you don't.** Netflix, YouTube and similar services
+  put cache servers *inside* carrier networks and peer with carriers directly, so their video
+  barely leaves the carrier's network. Your stream comes from a cloud data center, over
+  whatever peering, NAT, and IPv4/IPv6 translation path the carrier has to that provider's IP
+  ranges. That path can be slower, or more congested at peak times, than a speed test
+  suggests (see F9). Some plans also exempt ("zero-rate") named streaming services from data
+  caps; your server won't be on that list.
+- **Roaming abroad** adds the visited network's limits on top, and often a much smaller data
+  allowance.
+
+**How to tell carrier from server:** if the same phone plays fine on Wi-Fi *from a different
+network* (a friend's house, a café: not your home Wi-Fi, which bypasses the proxy, see F7),
+and other remote viewers on wired broadband are fine, the proxy is healthy and the limit is on
+the carrier side. Changing the server's bitrate settings won't fix a carrier cap. Lowering the
+app's Cellular quality is the practical answer.
 
 ### F10: Tailscale on the phone doesn't speed this up
 
