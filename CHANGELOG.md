@@ -26,3 +26,7 @@
   Plex never drops while tagging.
 - New F9b: mobile data metering, video throttling, deprioritization, hotspot limits, and
   why carrier-cached services outperform a cloud-hosted server on cellular.
+
+## 2026-10-24 (port forward)
+- Phase 8 expanded: manual vs UPnP/NAT-PMP forwards, where to find them on common
+  routers/firewalls, paired firewall rules, IPv6 pinholes, testing the real external port.

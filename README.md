@@ -666,17 +666,63 @@ on their devices; it's a per-device setting, not something you can push from the
 
 ### Phase 8: Close the old port forward
 
-30. **Disable** (don't delete) the router's Plex port forward. Keep it for a week or two as
-    your rollback, then delete it. Record its exact settings first.
-31. **Verify from a true outside vantage point.** Testing your own WAN IP from inside the LAN
-    needs NAT reflection and proves nothing. The VM is a convenient outside machine:
+Only do this once Phase 7's off-network test passed. Until now the old path has been your
+fallback.
+
+30. **Find out how your old remote access was opened.** There are two ways, and many setups
+    used the automatic one without anyone creating a rule:
+    - **Manual port forward:** a rule you (or someone) created on the router/firewall.
+      Your Phase 7 screenshot of *Settings → Remote Access* shows whether **Manually specify
+      public port** was ticked, and which port. It's often `32400`, but it can be anything.
+      Note it, because the test in step 31 has to use that port.
+    - **Automatic (UPnP / NAT-PMP):** if *Manually specify public port* was **unticked**, Plex
+      asked the router to open a port automatically. There may be no rule in the port-forward
+      list at all, only a temporary entry in the router's **UPnP** table, often on a random
+      high port. Disabling Remote Access in Phase 7 stops Plex from renewing it.
+
+    Find your home's public IP for the test: from home, open <https://ifconfig.me>.
+
+31. **Close it.** **Disable** (don't delete) any Plex forward and keep it for a week or two
+    as your rollback, then delete it. Write down its exact settings first: external port,
+    internal IP and port, protocol, and any source restriction.
+
+    Where it usually lives:
+
+    | Router / firewall | Port forward | Automatic (UPnP) mappings |
+    |---|---|---|
+    | **pfSense** | Firewall → NAT → **Port Forward** (disable the rule *in the GUI*, so the linked firewall rule is handled too) | Services → **UPnP IGD & PCP** → *Status* shows live mappings |
+    | **OPNsense** | Firewall → NAT → **Destination NAT** (older versions: *Port Forward*) | Services → **UPnP** (plugin), status page |
+    | **UniFi** (Network app) | Settings → Routing / Firewall → **Port Forwarding** (location varies by version) | Settings → Internet / Gateway → **UPnP** |
+    | **Consumer routers** (Netgear, ASUS, TP-Link, ISP gateways) | Usually *Advanced* → **Port Forwarding** / *Virtual Server* / *NAT* | Usually *Advanced* → **UPnP**, often with a table of current mappings |
+    | **ISP gateway + your own router** (double NAT) | Check **both** devices | Check both |
+
+    If you're unsure what a menu is called on your device, search for your router model plus
+    "port forwarding".
+
+    Also consider:
+    - **UPnP / NAT-PMP itself.** If nothing else on your network needs it (some game
+      consoles and voice/video apps use it), turning it off stops any app from opening
+      inbound ports on its own. That's a broader change than Plex, so only do it if you
+      understand what else relies on it.
+    - **Firewall rules.** Many firewalls create a matching "allow" rule along with a port
+      forward. Make sure that's disabled or removed too (pfSense does this automatically for
+      rules it created through the NAT page).
+    - **IPv6.** If your network has IPv6, check for an inbound IPv6 firewall rule
+      ("pinhole") to the Plex server. IPv6 needs no port forward, so a separate *allow* rule
+      may exist on its own.
+
+32. **Verify from a true outside vantage point.** Testing your own public IP from inside your
+    LAN depends on NAT reflection and proves nothing. The VM is a convenient outside machine.
+    Test **the external port you noted in step 30**, plus 32400:
 
     ```bash
-    # from the VM: the old port should now be closed/filtered
-    nc -vz -w 5 <your-home-wan-ip> 32400
+    # from the VM. Expect "timed out" / "refused", NOT "succeeded"
+    nc -vz -w 5 <your-home-public-ip> <old-external-port>
+    nc -vz -w 5 <your-home-public-ip> 32400
     ```
 
     And from your workstation, `https://plex.example.com/identity` should still return 200.
+    Then check again a day later: a UPnP entry that hadn't expired yet will be gone by then.
 
 At this point the goals are met: no inbound forward, and your home IP is published nowhere.
 
@@ -706,7 +752,7 @@ instead of by you, which breaks Taildrop for it.
 policy only lets *tagged* nodes reach Plex. Pasting the full policy first would cut remote
 Plex until you finished tagging. Three short saves avoid that gap.
 
-32. **Save a copy of the current policy, then define the tags.**
+33. **Save a copy of the current policy, then define the tags.**
     1. **Access controls → JSON editor.** Copy the whole contents into a local file, e.g.
        `tailscale-acl.before.hujson`. That's your rollback (and **Logs** records every
        policy change).
@@ -722,13 +768,13 @@ Plex until you finished tagging. Three short saves avoid that gap.
 
     3. Optional: open the **Preview rules** tab to check. Then click **Save**.
 
-33. **Tag the two servers.** **Machines** → `plex-proxy` row → **⋯** → **Edit ACL tags…** →
+34. **Tag the two servers.** **Machines** → `plex-proxy` row → **⋯** → **Edit ACL tags…** →
     **Add tags** → choose `tag:plex-proxy` → **Save**. Repeat for the Plex host with
     `tag:plex-server`. Doing it in the console means neither node has to re-authenticate.
     Each row now shows the tag, and *Expiry disabled*, since tagged nodes don't expire.
     Nothing is restricted yet, because the old allow-all rules are still in place.
 
-34. **Apply the real policy.** Open [examples/tailscale-acl.hujson](examples/tailscale-acl.hujson),
+35. **Apply the real policy.** Open [examples/tailscale-acl.hujson](examples/tailscale-acl.hujson),
     fill in the `hosts` block with your devices' tailnet IPs (`tailscale ip -4` on each, or
     the **Addresses** column in Machines), and adjust the `tests` to your devices. Then
     **Access controls → JSON editor** → replace the entire contents → **Save**.
@@ -739,7 +785,7 @@ Plex until you finished tagging. Three short saves avoid that gap.
     - If you lock yourself out of something: the admin console is a website and needs no
       tailnet access. Paste your saved copy back and **Save**.
 
-35. Verify from the VM:
+36. Verify from the VM:
 
     ```bash
     nc -vz -w 3 100.64.0.10 32400   # expect: succeeded
@@ -768,7 +814,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
 ### Phase 10: Harden the VM
 
-36. **Close public SSH.** Once you can `ssh ubuntu@100.64.0.20` over the tailnet:
+37. **Close public SSH.** Once you can `ssh ubuntu@100.64.0.20` over the tailnet:
 
     ```bash
     # delete any public port 22 accept rule, then:
@@ -786,7 +832,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
       the Tailscale port can. The serial console is your break-glass either way.
     - Geo filtering is not an SSH access control. In the build this repo came from, one
       week of logs showed hundreds of failed SSH logins from inside the allowed countries.
-37. **sshd**: `/etc/ssh/sshd_config.d/99-hardening.conf`:
+38. **sshd**: `/etc/ssh/sshd_config.d/99-hardening.conf`:
 
     ```
     PermitRootLogin no
@@ -797,7 +843,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
     `sudo sshd -t && sudo systemctl reload ssh`. Note the image also has an `opc` user;
     `AllowUsers` blocks it.
-38. **Automatic patching with reboots.** `unattended-upgrades` is on by default, but
+39. **Automatic patching with reboots.** `unattended-upgrades` is on by default, but
     `Automatic-Reboot` is off, so kernel fixes install and then never run. Add
     `/etc/apt/apt.conf.d/52unattended-upgrades-local`:
 
@@ -808,7 +854,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
     Cost: a ~30-second blip on nights a kernel update lands. Do the reboot test in Phase 6
     first, so you know everything comes back unattended.
-39. ⚠️ **Caddy and Tailscale do not auto-update.** `unattended-upgrades` only takes Ubuntu's
+40. ⚠️ **Caddy and Tailscale do not auto-update.** `unattended-upgrades` only takes Ubuntu's
     own origins by default, and these two come from third-party repositories. So the
     internet-facing TLS server and the daemon holding your tailnet key never update on their
     own. Pick one:
@@ -828,7 +874,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
 ### Phase 11: Monitoring
 
-40. **Run the health check somewhere other than the VM.** A box can't report its own death.
+41. **Run the health check somewhere other than the VM.** A box can't report its own death.
     The Plex host is the natural place: it probes the public URL exactly the way a viewer
     does (out your home internet, to the VM, through Caddy, back over the tunnel), so one
     request covers stale DNS, the VM being down, Caddy down, the tunnel down, an expired
@@ -862,13 +908,13 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
     (see [section 6](#synology-nas-plex-package-or-plex-in-container-manager)). Everything
     still answers, just slower. On a NAS, add `ip link show tailscale0` as a separate check.
 
-41. **Patch monitoring (recommended).** Daily: SSH to the VM over the tailnet and check pending
+42. **Patch monitoring (recommended).** Daily: SSH to the VM over the tailnet and check pending
     updates, whether a reboot is overdue, and whether `caddy`/`tailscale` are behind their
     candidate versions. This needs the `tag:plex-server → tag:plex-proxy:22` rule in the
     example ACL, and it doubles as a check that your admin SSH path still works after
     unattended reboots.
 
-42. **Weekly glance:**
+43. **Weekly glance:**
     - **Spend:** ☰ → **Billing & Cost Management** → **Cost Management** → **Budgets**
       (the *Spent* column), or **Cost Analysis** for a breakdown. Should be `$0`.
     - **Egress:** the instance's **Monitoring** tab shows network bytes out. Compare the
@@ -1209,7 +1255,8 @@ remote clients to Direct Play (see F8) matters more than any proxy tuning.
 
 Nothing here touches your library or Plex database.
 
-1. Re-enable the router port forward (you kept it disabled, not deleted).
+1. Re-enable the router port forward (you kept it disabled, not deleted). If you used UPnP,
+   re-enabling Remote Access in step 2 recreates the mapping automatically.
 2. In Plex Web: **Settings → Remote Access → Enable Remote Access**; **Settings →
    Network** → clear **Custom server access URLs** (and re-tick **Enable Relay** if you had
    it on) → **Save Changes**. Use your Phase 7 screenshots for the original values. Only
