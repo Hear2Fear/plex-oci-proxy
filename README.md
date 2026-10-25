@@ -191,38 +191,171 @@ about 30–40 ms home→VM, and no measurable throughput loss for viewers.
 
 ### Phase 1: Cloud account
 
-1. Create the Oracle Cloud account and choose your home region.
-2. Enable MFA. Oracle doesn't hand you recovery codes, so also enable the **Bypass Code**
-   factor (Identity & Security → Domains → Default → Security → MFA) and store a code in
-   your password manager.
-3. Upgrade to **Pay As You Go**: Billing & Cost Management → *Upgrade and Manage Payment*.
-   - Provisioning and the upgrade can each take a while. "Your account provisioning is in
-     progress" only clears with time; signing out and in doesn't help.
-   - **Ignore the "Free Tier account / Free Trial" banner after upgrading.** It's stale and
-     can persist for weeks. The *Upgrade and Manage Payment* page is what to trust.
-4. Create a **budget**: root compartment, $1, alert at 100% of actual spend.
+> **About the console paths below.** They were checked against the OCI console in
+> October 2026. Oracle reorganizes the console often. If a menu item has moved, type its
+> name into the search bar at the top of the console; that finds most pages directly.
+> The ☰ menu is top left, your profile avatar is top right, and the **region selector**
+> (e.g. "US East (Ashburn)") is next to it. Make sure it shows your home region before
+> creating anything.
+
+1. **Sign up** at <https://signup.cloud.oracle.com>.
+   - You need an email address, a phone number for SMS verification, and a credit card.
+     The card is for identity verification; Always Free resources aren't charged.
+   - **Cloud Account Name** becomes your *tenancy* name. You type it on every sign-in, so
+     keep it short. Write it down.
+   - **Home Region** is **permanent**: Always Free compute can only be created there.
+     Choose the region closest to you and your viewers (see
+     [Choosing the VM region](#choosing-the-vm-region)).
+   - Account provisioning can take from a few minutes to a few hours. You'll get an email
+     when it's ready.
+
+2. **MFA and a bypass code.** You'll be asked to enroll a second factor at first sign-in.
+   Use an authenticator app (Oracle Mobile Authenticator, Google Authenticator, etc.).
+   Oracle doesn't give you recovery codes, so set up a **bypass code** as well:
+   1. ☰ → **Identity & Security** → **Domains** → click **Default** →
+      **Authentication** tab → **Factors**.
+   2. If **Bypass code** doesn't show *Enabled*, click **Enable or Disable factors**,
+      tick **Bypass code**, and save.
+   3. Avatar (top right) → **My profile** → **Security** tab → scroll to **Bypass codes** →
+      **Generate**. Store the code in your password manager. (Each code is single-use; you
+      can have up to 5.)
+   4. While you're on that page, check **Account recovery options** shows a recovery email.
+
+3. **Upgrade to Pay As You Go (PAYG)**, so idle reclamation can't delete your VM:
+   1. ☰ → **Billing & Cost Management** → **Billing** → **Upgrade and Manage Payment**
+      (direct URL: `https://cloud.oracle.com/billing/upgrade-and-manage-payment`).
+   2. Choose **Pay As You Go**, confirm your card, submit.
+   3. Expect waiting. *"Your account provisioning is in progress"* blocks this page on a new
+      account and only clears with time. Signing out and back in doesn't help. Then
+      *"Your upgrade is in progress"* shows until an email confirms it.
+   4. **Check it worked on this same page**: it should say the account was upgraded and show
+      **Plan type: Pay As You Go**.
+   5. **Ignore the orange "Free Tier account / You are in a Free Trial" banner** that stays
+      at the top of the console afterwards. It's stale and can persist for weeks. Trust the
+      Upgrade and Manage Payment page.
+   - The upgrade is one-way: you can't convert back to a pure Always Free account.
+
+4. **Budget alert**, so any charge shows up right away:
+   1. ☰ → **Billing & Cost Management** → **Cost Management** → **Budgets** →
+      **Create Budget**.
+   2. Name it (e.g. `1-dollar-alert`). **Budget scope:** Compartment. **Target:** your root
+      compartment (the one named after your tenancy). **Schedule:** Monthly.
+      **Amount:** `1`.
+   3. Add an alert rule: **Threshold metric** *Actual spend*, **Threshold type**
+      *Percentage of budget*, **Threshold** `100`, and your email as recipient. Create.
+   4. The Budgets list then shows *Spent* for the month. It should stay at `US$0`.
 
 ### Phase 2: The VM and its two firewalls
 
-5. Create the instance:
-   - Shape `VM.Standard.A1.Flex`, **1 OCPU / 6 GB** is plenty.
-   - Image: **Ubuntu 24.04** (the login user is `ubuntu`; `opc` is for Oracle Linux).
-   - Upload your SSH public key.
-   - IPv6: leaving it off is simpler (one firewall ruleset, one geo list). See
-     [F9](#f9-one-mobile-carrier-is-very-slow-to-the-vm) for the trade-off.
-   - The in-wizard cost estimate (about $2/month for the boot volume) ignores the free
-     200 GB block-storage allowance. Check real spend in Cost Analysis after 48 hours.
-6. **Switch to a reserved public IP now, before anything depends on it.** The default IP is
-   ephemeral: stable across reboots, but lost if the instance is ever rebuilt. OCI can't
-   convert it in place: unassign the ephemeral IP, then assign a **reserved** one (free; up
-   to 2 per tenancy), which will be a *different* address. A reserved IP belongs to your
-   tenancy, so a rebuilt VM can reuse it and your DNS never changes.
+5. **Create the instance.** ☰ → **Compute** → **Instances** → check the compartment filter
+   shows your root compartment → **Create instance**. The wizard has five steps:
+
+   **Step 1: Basic information**
+   - **Name:** `plex-proxy`. **Create in compartment:** your root compartment.
+   - **Placement:** pick any availability domain (AD). If you later get *"Out of host
+     capacity"*, come back and try a different AD.
+   - **Image and shape: change *both* defaults.** The wizard preselects Oracle Linux and
+     an AMD shape (`VM.Standard.E5.Flex` when this was written), **and that shape is not
+     Always Free.**
+     1. **Change shape** → *Virtual machine* → **Ampere** → tick
+        **VM.Standard.A1.Flex** → set **Number of OCPUs: 1** and **Amount of memory (GB):
+        6** → **Select shape**. Do this first, so the image list offers the ARM (aarch64)
+        builds.
+     2. **Change image** → **Ubuntu** → **Canonical Ubuntu 24.04** (the regular image,
+        not *Minimal*) → **Select image**.
+     - The login user on this image is `ubuntu`, not `opc` (`opc` is Oracle Linux's).
+
+   **Step 2: Security**
+   - Leave **Shielded instance** and **Confidential computing** off.
+
+   **Step 3: Networking**
+   - **VNIC name:** optional, e.g. `plex-proxy-vnic`.
+   - **Primary network:** on a new account, choose **Create new virtual cloud network**
+     and give it a name (e.g. `plex-vcn`). **Subnet:** **Create new public subnet**. OCI
+     creates the VCN, a public subnet, an internet gateway, a route table, and a
+     **Default Security List**.
+   - **Private IPv4 address:** *Automatically assign private IPv4 address*.
+   - **Public IPv4 address assignment:** leave **Automatically assign public IPv4
+     address** on. You'll swap it for a reserved IP in step 6.
+   - **IPv6 address assignment:** leave off. That keeps one firewall ruleset and one geo
+     list. (See [F9](#f9-one-mobile-carrier-is-very-slow-to-the-vm) for the trade-off.)
+   - **Add SSH keys:** choose **Upload public key file (.pub)** or **Paste public key** and
+     use *your existing* key (e.g. `~/.ssh/id_ed25519.pub`). If you pick *Generate a key
+     pair for me*, you **must** click **Download private key** before leaving the page,
+     because it's never shown again.
+
+   **Step 4: Storage**
+   - Leave the default boot volume (about 47 GB) and in-transit encryption on.
+
+   **Step 5: Review** → **Create**.
+   - *View estimated cost* shows about **$2/month for the boot volume**. That's an artifact:
+     the in-wizard estimate prices storage at list rates and ignores the free 200 GB
+     block-storage allowance. Check real spend in the Budgets list (step 4) after 48 hours.
+   - The instance takes a minute or two to reach **Running**. Its **Public IP address** and
+     **Username** (`ubuntu`) show on the instance's **Details** tab under
+     *Instance access*.
+
+6. **Switch to a reserved public IP now, before anything depends on it.** The address from
+   step 5 is *ephemeral*: it survives reboots and stop/start, but it's released if the VNIC
+   is removed or the instance is terminated. A *reserved* IP belongs to your tenancy, so a
+   rebuilt VM can take the same address and your DNS never has to change. Reserved IPv4
+   addresses are free (the Always Free allowance includes 2).
+
+   OCI can't convert ephemeral to reserved in place. You switch, and get a **different**
+   address:
+   1. ☰ → **Compute** → **Instances** → `plex-proxy` → **Networking** tab → under
+      **Attached VNICs**, click the VNIC name (marked *Primary VNIC*).
+   2. **IP administration** tab → on the row for the primary private IP, click **⋯** →
+      **Edit**.
+   3. **Public IP type:** select **No public IP** → **Update**. The ephemeral IP is released.
+   4. **⋯** → **Edit** again → **Public IP type:** **Reserved public IP** →
+      **Create new Reserved IP Address** → name it (e.g. `plex-proxy-ip`) → compartment:
+      root → **Update**.
+   5. The row now shows the new address with **(Reserved)** after it. That's your
+      `203.0.113.10` for the rest of this guide. You can also see it under ☰ →
+      **Networking** → **IP management** → **Reserved public IPs**.
+   - If you SSH'd in already, reconnect to the new address.
    > A dynamic-DNS client on the VM is *not* a substitute. The only thing that changes an
    > OCI ephemeral IP is destroying the instance, and the DDNS client dies with it.
-7. **Cloud firewall (OCI Security List → ingress rules)**, source `0.0.0.0/0`:
-   - TCP 80, TCP 443, **UDP 41641**
-   - TCP 22 **from your own public IP `/32` only**, temporarily, for setup. You'll remove
-     it in Phase 10.
+
+7. **Cloud firewall: the VCN's Default Security List.**
+   1. ☰ → **Networking** → **Virtual cloud networks** → click your VCN → **Security** tab →
+      under **Security Lists**, click **Default Security List for &lt;your-vcn&gt;** →
+      **Security rules** tab.
+   2. The wizard created an ingress rule for **TCP 22 from `0.0.0.0/0`**: SSH open to the
+      whole internet. Click its **⋯** → **Edit** and change **Source CIDR** to **your own
+      public IP with `/32`** (find it at <https://ifconfig.me>). You'll delete the rule
+      completely in Phase 10, once SSH works over Tailscale.
+   3. **Add Ingress Rules** three times (one rule each). For every rule: **Stateless**
+      unticked, **Source Type** *CIDR*, **Source CIDR** `0.0.0.0/0`, **Source Port Range**
+      blank (= all):
+
+      | IP Protocol | Destination Port Range | Description |
+      |---|---|---|
+      | TCP | `80` | ACME + redirect to HTTPS |
+      | TCP | `443` | Plex over HTTPS |
+      | UDP | `41641` | Tailscale direct path |
+
+   4. Leave the two default **ICMP** rules alone (type 3 code 4 from `0.0.0.0/0`, and type 3
+      from the VCN's own CIDR). They carry path-MTU signalling.
+   5. Leave **Egress Rules** at the default (all protocols to `0.0.0.0/0`). The VM needs
+      Let's Encrypt, Tailscale's coordination servers, apt mirrors, and ipdeny.com.
+
+   When finished, the ingress list should hold exactly these five rules, plus the temporary
+   SSH rule until Phase 10:
+
+   | Source | Protocol | Dest. port | Purpose |
+   |---|---|---|---|
+   | `0.0.0.0/0` | ICMP 3, 4 | — | Path MTU (default) |
+   | `<vcn-cidr>` | ICMP 3 | — | Default |
+   | `0.0.0.0/0` | TCP | 80 | ACME + redirect |
+   | `0.0.0.0/0` | TCP | 443 | Plex |
+   | `0.0.0.0/0` | UDP | 41641 | Tailscale |
+
+   This list is evaluated as a set, so rule order doesn't matter. (The host firewall in the
+   next step is different: there, order is everything.)
+
+   First SSH login: `ssh ubuntu@203.0.113.10`.
 8. **Host firewall.** Oracle's Ubuntu image ships with iptables whose INPUT chain **ends in a
    `REJECT` rule**. Rules appended after it never match. Find its position first:
 
@@ -240,6 +373,12 @@ about 30–40 ms home→VM, and no measurable throughput loss for viewers.
 10. Set a password for `ubuntu` (`sudo passwd ubuntu`) and store it. Ubuntu cloud images
     have no console password, so the OCI **serial console**, your break-glass if SSH ever
     fails, is useless until you do this. SSH stays key-only, so this doesn't weaken SSH.
+    - **Find the serial console now**, not during an outage: ☰ → **Compute** →
+      **Instances** → `plex-proxy` → **Actions** → **More actions** →
+      **Troubleshoot instance** → *connect to the instance's serial console*. It opens in
+      OCI **Cloud Shell** in your browser and needs no open ports, only your OCI login.
+    - Careful in that **Actions** menu: **Stop**, **Reboot** and **Terminate** sit right above
+      *More actions*.
 
 ### Phase 3: Tailscale on the VM
 
@@ -480,7 +619,9 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
     ```
 
     Then **delete the TCP 22 ingress rule from the OCI Security List** so the packet dies at
-    Oracle's edge. Tailnet SSH keeps working because Tailscale's own `ts-input` chain sits
+    Oracle's edge: ☰ → **Networking** → **Virtual cloud networks** → your VCN →
+    **Security** tab → **Default Security List** → **Security rules** → on the TCP 22 row,
+    open **⋯** and remove the rule. Afterwards, from outside: `nc -vz -w 5 203.0.113.10 22` should fail. Tailnet SSH keeps working because Tailscale's own `ts-input` chain sits
     first in INPUT and accepts traffic arriving on `tailscale0`.
     - Use the firewall, not `ListenAddress` in `sshd_config`. sshd can start before
       `tailscale0` has an address and then fail to bind.
@@ -570,8 +711,11 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
     example ACL, and it doubles as a check that your admin SSH path still works after
     unattended reboots.
 
-40. **Weekly glance:** OCI egress (Observability → Metrics) against the 10 TB allowance, and
-    actual spend in Cost Analysis.
+40. **Weekly glance:**
+    - **Spend:** ☰ → **Billing & Cost Management** → **Cost Management** → **Budgets**
+      (the *Spent* column), or **Cost Analysis** for a breakdown. Should be `$0`.
+    - **Egress:** the instance's **Monitoring** tab shows network bytes out. Compare the
+      monthly total against the 10 TB allowance.
 
 ---
 

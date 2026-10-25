@@ -7,3 +7,8 @@
 
 ## 2026-10-24 (later)
 - Added MIT LICENSE.
+
+## 2026-10-24 (OCI detail)
+- Phases 1-2 rewritten with exact OCI console click paths, verified against a live tenancy:
+  sign-up fields, bypass codes, PAYG, budget, the 5-step Create instance wizard (default
+  shape is not Always Free), reserved-IP swap, Default Security List rules, serial console.
