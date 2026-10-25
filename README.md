@@ -894,3 +894,7 @@ Nothing here touches your library or Plex database.
 | [scripts/notify-examples.sh](scripts/notify-examples.sh) | same | Notifier backends: ntfy, Telegram, Pushover, SMTP |
 
 Contributions and corrections are welcome. Open an issue or a pull request.
+
+## License
+
+[MIT](LICENSE). Use, copy, and adapt freely; no warranty.
