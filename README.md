@@ -499,25 +499,93 @@ Rules that are easy to get wrong:
 
 ⚠️ This is the first phase that changes what existing users experience.
 
-25. **Back up `Preferences.xml`** (only that file, not the multi-GB config directory). Also
-    screenshot Settings → Remote Access.
-26. In the **Plex web UI** (not by editing `Preferences.xml`; Plex rewrites it on shutdown),
-    under Settings → **Network** (show advanced):
+All of this is done in **Plex Web** while signed in as the **server owner** (the admin
+account, not a managed or Home user). Use the web UI, not hand edits to the settings file:
+Plex rewrites `Preferences.xml` on shutdown and can overwrite your changes. Settings take
+effect when you click **Save Changes**, with no server restart.
 
-    | Setting | Value | Why |
+**Getting to server settings:** open <https://app.plex.tv/desktop> (or
+`http://<plex-lan-ip>:32400/web` from home) → **wrench icon** (top right) → in the left
+sidebar, under your **server's name**, the **Settings** group lists *General, Remote Access,
+… Network, …*. Most fields below appear only after you click **Show Advanced** at the top of
+the page.
+
+25. **Back up first.** You need this for rollback ([section 10](#10-rollback)).
+    1. Screenshot **Settings → Remote Access** and **Settings → Network** (with *Show
+       Advanced* on).
+    2. Copy the server's settings file. Copy only this file, never the whole (often
+       multi-GB) Plex data folder:
+
+       | Plex runs on | Settings live in |
+       |---|---|
+       | Linux (native package) | `/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Preferences.xml` |
+       | Docker (any host) | `<your config volume>/Library/Application Support/Plex Media Server/Preferences.xml` |
+       | Synology package (DSM 7) | `/volume1/PlexMediaServer/AppData/Plex Media Server/Preferences.xml` |
+       | Windows | The **registry**, not a file: `reg export "HKCU\Software\Plex, Inc.\Plex Media Server" plex-prefs.reg` (as the user Plex runs under) |
+       | macOS | `~/Library/Preferences/com.plexapp.plexmediaserver.plist` |
+
+       ```bash
+       cp ".../Preferences.xml" ~/Preferences.xml.$(date +%Y%m%d_%H%M%S).bak
+       ```
+
+26. **Settings → Network** (click **Show Advanced**). Set these, leave everything else at
+    its current value, then **Save Changes** at the bottom:
+
+    | Field (as labelled in Plex) | Set to | Why |
     |---|---|---|
-    | Custom server access URLs | `https://plex.example.com:443` | What plex.tv advertises to remote clients. **HTTPS only.** Never add an `http://` URL: port 80 is deliberately unfiltered, so it would give clients a path around the geo filter, and Caddy redirects it to HTTPS anyway |
-    | Secure connections | `Preferred` | `Required` also affects local connections; HTTPS-only remote access already comes from the advertised URL |
-    | LAN Networks | `<LAN-CIDR>` | Keeps home clients playing directly on the LAN instead of going out to the VM and back, which also saves egress |
-    | List of IP addresses and networks that are allowed without auth | **Leave as is. Never add the VM's tailnet IP or `100.64.0.0/10`** | See the warning below |
+    | **Secure connections** | `Preferred` | Options are *Preferred* and *Required*. *Required* also applies to local connections and locks out older apps; remote traffic is already HTTPS-only because of the URL below |
+    | **LAN Networks** | Your home subnets, comma-separated, e.g. `10.0.10.0/24,10.0.20.0/24` | Tells Plex which clients are *local* for bandwidth/quality rules, so home devices play at full quality directly over the LAN instead of going out to the VM and back (which also uses egress). List every home VLAN with Plex clients. **Don't** add any `100.x` tailnet address |
+    | **Enable Relay** | **Unticked** | Relay is Plex's own fallback tunnel. It's capped at about 1–2 Mbps, and it's a second remote path that goes around your proxy and its geo filter |
+    | **Custom server access URLs** | `https://plex.example.com:443` | The address plex.tv hands to remote apps. Include the `:443`. **HTTPS only:** never add an `http://` URL; port 80 on the VM is deliberately unfiltered (see F2), so it would be a path around the geo filter |
+    | **List of IP addresses and networks that are allowed without auth** | **Leave it as it is.** Usually empty, or your LAN only | ⚠️ See the warning below. Never put the VM's tailnet IP or `100.64.0.0/10` here |
+    | **Remote streams allowed per user** | Your choice (*Unlimited* by default) | Applies to everyone coming through the proxy, since they all count as remote |
+    | **Preferred network interface**, **Client Network**, **Treat WAN IP As LAN Bandwidth** | Leave at their current values | Not involved in this design |
 
-27. Settings → **Remote Access → Disable.** You're replacing it. The setting takes effect
-    without a restart.
-28. **Test from a device that's genuinely off your network.** Phone on cellular is easiest.
-    "Plays fine on Wi-Fi" proves nothing: on Wi-Fi the app connects straight to the LAN
-    address and never touches the VM. Prove the stream went through the proxy by checking
-    Caddy's access log for `/library/parts/` or `transcode/universal/session` requests, or
-    Tautulli/Plex dashboard showing the client's address as the **VM's tailnet IP**.
+27. **Settings → Remote Access** (click **Show Advanced**):
+    1. Click **Disable Remote Access**. This turns off Plex's own port-forward-based access.
+       Your proxy replaces it.
+    2. ⚠️ **The page will now say *"Not available outside your network"* in red, and the
+       sidebar shows a red dot next to Remote Access. That's expected and harmless.** The
+       check only tests Plex's own port-forward method, which you just turned off on
+       purpose. Remote viewers still connect through the custom URL.
+    3. Optional, on the same page:
+       - **Internet upload speed:** your *home* connection's upload in Mbps. Every remote
+         stream leaves your house over upload (to the VM), so this is the real limit.
+       - **Limit remote stream bitrate:** a server-wide cap on remote streams (e.g.
+         *20 Mbps (1080p)*), or *Original (No limit)*. A cap here forces transcoding above it.
+       - Leave **Manually specify public port** unticked; there's no forward any more.
+    4. **Save Changes.**
+
+28. **Check the saved values in the settings file** (optional, Linux/Docker/Synology). This
+    confirms the UI saved what you think it did:
+
+    ```bash
+    grep -oE '(customConnections|secureConnections|LanNetworksBandwidth|allowedNetworks|PublishServerOnPlexOnlineKey|RelayEnabled)="[^"]*"' \
+      ".../Preferences.xml"
+    ```
+
+    Expect `customConnections="https://plex.example.com:443"`,
+    `PublishServerOnPlexOnlineKey="0"` (Remote Access off), `RelayEnabled="0"`, your subnets
+    in `LanNetworksBandwidth`, and **no** `100.` address in `allowedNetworks`.
+
+29. **Test from a device that's genuinely off your network.** A phone on cellular, with
+    Wi-Fi **off**, is easiest.
+    - **"Plays fine on Wi-Fi" proves nothing.** On home Wi-Fi the app connects straight to
+      the server's LAN address and never touches the VM.
+    - Start playing something, then on the server: **Status → Dashboard** (in the same
+      settings sidebar). The session's address should be the **VM's tailnet IP**
+      (`100.64.0.20`). Tautulli shows the same. On the VM, Caddy's access log should show
+      `/library/parts/` (Direct Play) or `transcode/universal/session` (transcode) requests.
+    - Remote apps can take a few minutes to pick up the new URL from plex.tv. If an app
+      can't find the server, sign out of it and back in, or force-close and reopen it.
+    - Have one real remote viewer test on their own TV app (Roku, smart TV, console). In
+      the original build, a Roku and other living-room apps worked over HTTPS.
+
+**Who is "remote" now.** Plex decides *local vs remote* by the client's IP address. Home
+devices in **LAN Networks** stay local. Anything arriving through the proxy shows up with
+the VM's tailnet address, which isn't in LAN Networks, so it's correctly treated as remote:
+remote stream limits, remote bitrate caps and authentication all apply. That's exactly why
+the next warning matters.
 
 > ⚠️ **The most dangerous setting in this whole build.** Once traffic goes through the proxy,
 > **every remote viewer appears to Plex as the VM's tailnet IP** (`100.64.0.20`). Plex's
@@ -533,16 +601,21 @@ Rules that are easy to get wrong:
 IP geolocation in Tautulli and Plex no longer shows where viewers really are.
 
 **Client quality caps.** If a remote stream looks soft or keeps transcoding, check the
-*client app's* quality setting before blaming the server. The Roku app and the iOS app's
-cellular setting both default to low bitrates. Set them to **Original/Maximum** and the
-stream usually switches to Direct Play, which is better for the viewer and far lighter on
-the server.
+*client app's* quality setting before blaming the server. Most Plex apps default remote and
+cellular streaming to a low bitrate:
+- **Plex Web:** wrench icon → **Plex Web** → **Quality** → *Remote Streaming*.
+- **Phone/tablet/TV apps:** the app's **Settings** → **Quality** (look for *Remote* /
+  *Internet* streaming and, on phones, *Cellular*).
+
+Set these to **Original / Maximum** and the stream usually switches to Direct Play, which is
+better for the viewer and far lighter on the server. Ask your remote viewers to do the same
+on their devices; it's a per-device setting, not something you can push from the server.
 
 ### Phase 8: Close the old port forward
 
-29. **Disable** (don't delete) the router's Plex port forward. Keep it for a week or two as
+30. **Disable** (don't delete) the router's Plex port forward. Keep it for a week or two as
     your rollback, then delete it. Record its exact settings first.
-30. **Verify from a true outside vantage point.** Testing your own WAN IP from inside the LAN
+31. **Verify from a true outside vantage point.** Testing your own WAN IP from inside the LAN
     needs NAT reflection and proves nothing. The VM is a convenient outside machine:
 
     ```bash
@@ -565,7 +638,7 @@ Real example from building this: a desktop joined the tailnet during the hardeni
 was **immediately reachable on SMB (port 445) from the cloud VM**. With allow-all, exposure
 grows silently with every device you add.
 
-31. **Tag the nodes** in the admin console (Machines → ⋯ → *Edit ACL tags*). Doing it from
+32. **Tag the nodes** in the admin console (Machines → ⋯ → *Edit ACL tags*). Doing it from
     the console means no node has to re-authenticate. Tagged nodes stop being "your" devices
     and are governed only by tag rules; their key expiry is disabled automatically.
 
@@ -577,12 +650,12 @@ grows silently with every device you add.
 
     Keep personal devices **untagged**. Tagging a phone or laptop breaks Taildrop for it.
 
-32. Start from [examples/tailscale-acl.hujson](examples/tailscale-acl.hujson). Fill in the
+33. Start from [examples/tailscale-acl.hujson](examples/tailscale-acl.hujson). Fill in the
     `hosts` block with your tailnet IPs and paste it into **Access controls** in the admin
     console. The `tests` block runs on every save and **refuses the save if a test fails**.
     That's your safety net. Keep it, and add a test whenever you add a rule.
 
-33. Verify from the VM:
+34. Verify from the VM:
 
     ```bash
     nc -vz -w 3 100.64.0.10 32400   # expect: succeeded
@@ -611,7 +684,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
 ### Phase 10: Harden the VM
 
-34. **Close public SSH.** Once you can `ssh ubuntu@100.64.0.20` over the tailnet:
+35. **Close public SSH.** Once you can `ssh ubuntu@100.64.0.20` over the tailnet:
 
     ```bash
     # delete any public port 22 accept rule, then:
@@ -629,7 +702,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
       the Tailscale port can. The serial console is your break-glass either way.
     - Geo filtering is not an SSH access control. In the build this repo came from, one
       week of logs showed hundreds of failed SSH logins from inside the allowed countries.
-35. **sshd**: `/etc/ssh/sshd_config.d/99-hardening.conf`:
+36. **sshd**: `/etc/ssh/sshd_config.d/99-hardening.conf`:
 
     ```
     PermitRootLogin no
@@ -640,7 +713,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
     `sudo sshd -t && sudo systemctl reload ssh`. Note the image also has an `opc` user;
     `AllowUsers` blocks it.
-36. **Automatic patching with reboots.** `unattended-upgrades` is on by default, but
+37. **Automatic patching with reboots.** `unattended-upgrades` is on by default, but
     `Automatic-Reboot` is off, so kernel fixes install and then never run. Add
     `/etc/apt/apt.conf.d/52unattended-upgrades-local`:
 
@@ -651,7 +724,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
     Cost: a ~30-second blip on nights a kernel update lands. Do the reboot test in Phase 6
     first, so you know everything comes back unattended.
-37. ⚠️ **Caddy and Tailscale do not auto-update.** `unattended-upgrades` only takes Ubuntu's
+38. ⚠️ **Caddy and Tailscale do not auto-update.** `unattended-upgrades` only takes Ubuntu's
     own origins by default, and these two come from third-party repositories. So the
     internet-facing TLS server and the daemon holding your tailnet key never update on their
     own. Pick one:
@@ -671,7 +744,7 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
 
 ### Phase 11: Monitoring
 
-38. **Run the health check somewhere other than the VM.** A box can't report its own death.
+39. **Run the health check somewhere other than the VM.** A box can't report its own death.
     The Plex host is the natural place: it probes the public URL exactly the way a viewer
     does (out your home internet, to the VM, through Caddy, back over the tunnel), so one
     request covers stale DNS, the VM being down, Caddy down, the tunnel down, an expired
@@ -705,13 +778,13 @@ If your Plex host uses a **subnet router** instead of running Tailscale itself (
     (see [section 6](#synology-nas-plex-package-or-plex-in-container-manager)). Everything
     still answers, just slower. On a NAS, add `ip link show tailscale0` as a separate check.
 
-39. **Patch monitoring (recommended).** Daily: SSH to the VM over the tailnet and check pending
+40. **Patch monitoring (recommended).** Daily: SSH to the VM over the tailnet and check pending
     updates, whether a reboot is overdue, and whether `caddy`/`tailscale` are behind their
     candidate versions. This needs the `tag:plex-server → tag:plex-proxy:22` rule in the
     example ACL, and it doubles as a check that your admin SSH path still works after
     unattended reboots.
 
-40. **Weekly glance:**
+41. **Weekly glance:**
     - **Spend:** ☰ → **Billing & Cost Management** → **Cost Management** → **Budgets**
       (the *Spent* column), or **Cost Analysis** for a breakdown. Should be `$0`.
     - **Egress:** the instance's **Monitoring** tab shows network bytes out. Compare the
@@ -1017,8 +1090,10 @@ remote clients to Direct Play (see F8) matters more than any proxy tuning.
 Nothing here touches your library or Plex database.
 
 1. Re-enable the router port forward (you kept it disabled, not deleted).
-2. Restore `Preferences.xml` from the Phase 7 backup, or in the UI: re-enable **Remote
-   Access** and clear **Custom server access URLs**.
+2. In Plex Web: **Settings → Remote Access → Enable Remote Access**; **Settings →
+   Network** → clear **Custom server access URLs** (and re-tick **Enable Relay** if you had
+   it on) → **Save Changes**. Use your Phase 7 screenshots for the original values. Only
+   restore the backed-up `Preferences.xml` with Plex **stopped**, or Plex overwrites it.
 3. Delete the `plex` DNS record.
 4. Optional: terminate the VM. Release the reserved IP if you won't rebuild.
 5. Optional: remove the VM from your tailnet, and its rules from the ACL.
