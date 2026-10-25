@@ -1,0 +1,101 @@
+// tailscale-acl.hujson: least-privilege tailnet policy for a Plex proxy.
+//
+// Paste into https://login.tailscale.com/admin/acls (JSON editor) and Save.
+// The "tests" block runs on every save and REFUSES the save if a test fails.
+// Keep it, and add a test for every rule you add.
+//
+// Threat model: the cloud VM is the one deliberately internet-facing node.
+// Tailscale's default policy allows everything between your devices, so a
+// compromised VM could reach SSH, NAS admin pages, SMB, etc. on every device.
+// This policy caps the VM at the Plex port and nothing else.
+//
+// Rollback: the admin console keeps a version history of the policy, and it is
+// reachable from any browser (no tailnet needed), so a mistake here is cheap.
+{
+  // Tag the VM and the Plex host from the admin console
+  // (Machines -> ... -> Edit ACL tags) so neither has to re-authenticate.
+  // Tagged nodes are no longer "your" devices: only tag rules apply to them,
+  // and their key expiry is disabled automatically.
+  "tagOwners": {
+    "tag:plex-proxy":  ["autogroup:admin"],  // internet-facing, least trusted
+    "tag:plex-server": ["autogroup:admin"],
+  },
+
+  // Fill these in from `tailscale ip -4` on each device.
+  // Personal devices are listed by IP rather than tagged: tagging a phone or
+  // laptop makes it node-owned and breaks Taildrop. If you delete and re-add a
+  // device it gets a new IP, so update it here.
+  "hosts": {
+    "plex-proxy":   "100.64.0.20",
+    "plex-server":  "100.64.0.10",
+    "admin-laptop": "100.64.0.30",
+    "admin-phone":  "100.64.0.31",
+
+    // Not a real node. Lets the tests prove that a device which is not on the
+    // admin list gets nothing.
+    "unlisted-node": "100.127.255.254",
+  },
+
+  "acls": [
+    // 1. The proxy may reach exactly one thing: Plex.
+    //    Subnet-router setups: use the Plex host's LAN IP here instead,
+    //    e.g. "dst": ["10.0.10.5:32400"], and approve the advertised route.
+    {
+      "action": "accept",
+      "src":    ["tag:plex-proxy"],
+      "dst":    ["plex-server:32400"],
+    },
+
+    // 2. Optional: the Plex host may SSH to the proxy for patch monitoring.
+    //    Trust direction is deliberate: the more-trusted home server reaches
+    //    the less-trusted disposable VM, never the other way round.
+    //    Delete this rule if you don't run monitoring from the Plex host.
+    {
+      "action": "accept",
+      "src":    ["tag:plex-server"],
+      "dst":    ["plex-proxy:22"],
+    },
+
+    // 3. Admin devices reach everything. Listed by name on purpose: with
+    //    "autogroup:member" every NEW device would get full access the moment
+    //    you approve it. With an explicit list, a new device gets nothing until
+    //    you add it here.
+    {
+      "action": "accept",
+      "src":    ["admin-laptop", "admin-phone"],
+      "dst":    ["*:*"],
+    },
+  ],
+
+  "tests": [
+    {
+      // The whole point: a compromised proxy gets Plex and nothing else.
+      "src":    "tag:plex-proxy",
+      "accept": ["plex-server:32400"],
+      "deny":   [
+        "plex-server:22",     // SSH
+        "plex-server:445",    // SMB
+        "plex-server:5001",   // e.g. Synology DSM (adjust for your host's admin UI)
+        "admin-laptop:445",
+        "admin-laptop:22",
+      ],
+    },
+    {
+      // The Plex host can reach the proxy for admin only, not its web ports.
+      "src":    "tag:plex-server",
+      "accept": ["plex-proxy:22"],
+      "deny":   ["plex-proxy:443", "admin-laptop:445"],
+    },
+    {
+      // Your admin devices still reach what you need.
+      "src":    "admin-laptop",
+      "accept": ["plex-server:22", "plex-server:32400", "plex-proxy:22"],
+    },
+    {
+      // A device that isn't on the admin list gets nothing. If this test ever
+      // starts failing, someone reintroduced a blanket rule.
+      "src":  "unlisted-node",
+      "deny": ["plex-server:22", "plex-server:32400", "plex-proxy:22", "admin-laptop:445"],
+    },
+  ],
+}

@@ -1,0 +1,36 @@
+# /etc/caddy/Caddyfile: Plex reverse proxy on the cloud VM.
+#
+# Replace plex.example.com with your hostname and 100.64.0.10 with the Plex
+# host's Tailscale IP (or its LAN IP if you use a subnet router).
+# Validate before reloading:
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+
+{
+	servers {
+		timeouts {
+			# Bounds how long a client may take to send request headers.
+			# Do NOT add write or idle timeouts: Plex streams are long-lived
+			# and a write timeout cuts playback mid-stream.
+			read_header 15s
+		}
+	}
+}
+
+plex.example.com {
+	header {
+		Strict-Transport-Security "max-age=15552000"
+		-Server
+	}
+
+	# Optional access log; useful for confirming remote streams really
+	# transit the proxy (/library/parts/ = Direct Play,
+	# transcode/universal/session = transcode).
+	log {
+		output file /var/log/caddy/plex-access.log {
+			roll_size 50MiB
+			roll_keep 5
+		}
+	}
+
+	reverse_proxy 100.64.0.10:32400
+}
